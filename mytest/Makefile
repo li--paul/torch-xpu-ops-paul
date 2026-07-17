@@ -9,5 +9,8 @@ LDLIBS   = -lccl -lmpi
 test_single_p2p: test_single_p2p.cpp
 	$(CXX) $(CXXFLAGS) $< $(LDFLAGS) $(LDLIBS) -o $@
 
+test_all_reduce_coalesced: test_all_reduce_coalesced.cpp
+	$(CXX) $(CXXFLAGS) $< $(LDFLAGS) $(LDLIBS) -o $@
+
 clean:
-	rm -f test_single_p2p
+	rm -f test_single_p2p test_all_reduce_coalesced

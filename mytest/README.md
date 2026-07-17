@@ -131,6 +131,48 @@ make -C mytest
 
 两种方式最终都调用同一个底层路径：**oneCCL C++ API (`ccl::send`)** → `libccl.so` → Level Zero → Intel GPU。
 
+## SYCL C++ all_reduce_coalesced 测试
+
+### `test_all_reduce_coalesced.cpp`
+
+使用 `ccl::group_start()/group_end()` 将 5 个不同 size 的 `ccl::allreduce` 合并为一次批量 kernel launch。
+
+**核心逻辑**:
+```cpp
+// 创建 5 个 USM buffer, size 分别为 [60, 61, 62, 63, 64]
+// 每个 buffer 填充值: rank + 1 + i
+
+// 合并调用: group_start/end 包裹
+ccl::group_start();
+for (int i = 0; i < 5; ++i)
+    ccl::allreduce(bufs[i], bufs[i], sizes[i], ccl::datatype::int32,
+                   ccl::reduction::sum, comm, stream);
+ccl::group_end();
+
+// 验证: 每个元素 = world_size * (i + (world_size + 1.0) / 2.0)
+```
+
+**构建与运行**:
+```bash
+make -C mytest test_all_reduce_coalesced
+./mytest/run_sycl_all_reduce_coalesced.sh
+```
+
+**输出**:
+```
+[rank 0] PASS coalesced allreduce
+[rank 1] PASS coalesced allreduce
+```
+
+### 与 Python 测试的对应关系
+
+| Python | SYCL C++ |
+|--------|----------|
+| `dist.all_reduce_coalesced(tensors)` | `ccl::group_start()` + N×`ccl::allreduce` + `ccl::group_end()` |
+| `_coalescing_manager` context manager | 同上（Python 侧收集 op，最终也是 group_start/end） |
+
+两种方式最终都调用 `ccl::allreduce` 在 GPU 上执行 SUM 规约。oneCCL 的 `ccl::group_start/end` 确保多个 allreduce 作为一次批量操作提交，在底层合并 kernel launch，减少驱动开销。
+
 ## `dist.send()` 底层调用链分析
 
 从 Python 到 GPU 驱动的完整调用链：
