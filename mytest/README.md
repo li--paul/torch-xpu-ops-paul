@@ -131,6 +131,73 @@ make -C mytest
 
 两种方式最终都调用同一个底层路径：**oneCCL C++ API (`ccl::send`)** → `libccl.so` → Level Zero → Intel GPU。
 
+## 自定义 XPU 算子示例
+
+### 问题: 算子实现如何获取 Tensor 对应的 SYCL queue？
+
+当 PyTorch 算子收到一个 `device='xpu:1'` 的 tensor 时，需要通过以下链路拿到正确的 `sycl::queue`:
+
+```
+Tensor (device=xpu:1)
+  │  tensor.device().index() → 1
+  ▼
+c10::xpu::getCurrentXPUStream(dev_idx)
+  │  streams[1][NORMAL][stream_id] → sycl::queue*
+  ▼
+sycl::queue::submit(cgh)  →  GPU 设备 1 上执行
+```
+
+### `custom_op.cpp` — 自定义算子演示
+
+两个 demo op:
+
+**`whoami`** — 打印 tensor 所在设备和 SYCL queue 信息:
+```cpp
+std::string whoami(const at::Tensor& input) {
+  auto device = input.device();
+  int dev_idx = device.index();
+  auto& queue = c10::xpu::getCurrentXPUStream(dev_idx).queue();
+}
+```
+
+**`add_one`** — 用 SYCL kernel 对 tensor 逐元素加 1:
+```cpp
+at::Tensor add_one(const at::Tensor& input) {
+  int dev_idx = input.device().index();
+  auto& queue = c10::xpu::getCurrentXPUStream(dev_idx).queue();
+  queue.submit([&](sycl::handler& cgh) {
+    cgh.parallel_for(sycl::range<1>(n), [=](sycl::id<1> i) {
+      out_ptr[i] = in_ptr[i] + 1.0f;
+    });
+  });
+}
+```
+
+**构建**:
+```bash
+make -f mytest/Makefile.custom_op -C mytest
+```
+
+**运行**:
+```bash
+./mytest/run_custom_op.sh
+```
+
+**输出**:
+```
+[rank 0] device=xpu:0, sycl::queue=0x284e1900, backend=Level Zero
+[rank 0] PASS add_one
+[rank 1] device=xpu:1, sycl::queue=0x2bb12010, backend=Level Zero
+[rank 1] PASS add_one
+```
+
+### 关键点
+
+- **`c10::xpu::getCurrentXPUStream(device_index)`** 是标准入口，定义在 `c10/xpu/XPUStream.h`
+- `queue()` 返回预创建的 `sycl::queue`，已绑定到对应设备的 `sycl::device` 和 `sycl::context`
+- 使用 `icpx -fsycl` 编译，链接 `libtorch_xpu.so` + `libc10_xpu.so`
+- 由于本机主进程 Level Zero 驱动状态可能退化，测试通过 `mp.spawn` 在子进程中运行
+
 ## SYCL C++ all_reduce_coalesced 测试
 
 ### `test_all_reduce_coalesced.cpp`

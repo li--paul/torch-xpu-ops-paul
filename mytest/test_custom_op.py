@@ -1,0 +1,24 @@
+import torch
+import torch.multiprocessing as mp
+
+def worker(rank):
+    with torch.xpu.device(rank):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "custom_op", "/home/lm/paul2/torch-xpu-ops/mytest/custom_op.so")
+        custom = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(custom)
+
+        t = torch.tensor([1.0, 2.0, 3.0], device=f"xpu:{rank}")
+        r = custom.whoami(t)
+        print(f"[rank {rank}] {r}")
+
+        out = custom.add_one(t)
+        expected = t + 1
+        if torch.equal(out, expected):
+            print(f"[rank {rank}] PASS add_one")
+        else:
+            print(f"[rank {rank}] FAIL add_one: {out} != {expected}")
+
+if __name__ == "__main__":
+    mp.spawn(worker, args=(), nprocs=2)
