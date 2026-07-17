@@ -85,6 +85,52 @@ python mytest/test_single_p2p.py
 
 `mp.spawn` 方式避开了 `torchrun` 引入的代理进程与 oneCCL ATL/OFI 传输层之间的初始化冲突。`FileStore`（本地文件）替代 `TCPStore`（网络）做 rendezvous 也能正常工作。
 
+## SYCL C++ 独立 P2P 测试
+
+### `test_single_p2p.cpp`
+
+自包含的 SYCL C++ 程序，使用 oneCCL C++ API (`ccl::send` / `ccl::recv`) 直接在 XPU 设备上做 GPU P2P 传输，不依赖 Python 或 PyTorch。
+
+**核心流程**:
+```
+ccl::init() → MPI_Init → sycl::queue(devices[rank]) → KVS rendezvous
+  → ccl::create_communicator → ccl::create_stream
+  → ccl::send / ccl::recv → sycl::free → MPI_Finalize
+```
+
+**构建**:
+```bash
+make -C mytest
+# icpx -fsycl test_single_p2p.cpp -I$CCL_ROOT/include -I$MPI_ROOT/include \
+#       -L$CCL_ROOT/lib -L$MPI_ROOT/lib -lccl -lmpi -o test_single_p2p
+```
+
+**运行**:
+```bash
+./mytest/run_sycl_p2p.sh
+# mpirun -np 2 ./test_single_p2p
+```
+
+**输出**:
+```
+[rank 0] sending from GPU Intel(R) Arc(TM) Pro B60 Graphics
+[rank 1] sending from GPU Intel(R) Arc(TM) Pro B60 Graphics
+[rank 0] PASS
+[rank 1] PASS
+```
+
+### 关键发现
+
+| 角度 | Python + PyTorch | SYCL C++ 独立 |
+|------|-----------------|--------------|
+| 启动方式 | `mp.spawn` + `FileStore` | `mpirun` + `MPI_Bcast` KVS |
+| 通信 API | `dist.send/recv` | `ccl::send/recv` |
+| 设备绑定 | 通过 `torch.xpu.set_device()` | `sycl::device::get_devices()[rank]` |
+| GPU 内存 | PyTorch Tensor (USM 自动管理) | `sycl::malloc_device` |
+| 结果 | ✅ PASS | ✅ PASS |
+
+两种方式最终都调用同一个底层路径：**oneCCL C++ API (`ccl::send`)** → `libccl.so` → Level Zero → Intel GPU。
+
 ## `dist.send()` 底层调用链分析
 
 从 Python 到 GPU 驱动的完整调用链：
