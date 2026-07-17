@@ -1,11 +1,14 @@
+import os
 import torch
 import torch.multiprocessing as mp
+
+_script_dir = os.path.dirname(os.path.abspath(__file__))
 
 def worker(rank):
     with torch.xpu.device(rank):
         import importlib.util
         spec = importlib.util.spec_from_file_location(
-            "custom_op", "/home/lm/paul2/torch-xpu-ops/mytest/custom_op.so")
+            "custom_op", os.path.join(_script_dir, "custom_op.so"))
         custom = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(custom)
 
