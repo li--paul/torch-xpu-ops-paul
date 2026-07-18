@@ -15,5 +15,15 @@ LDFLAGS = -L$(TORCH_DIR)/lib \
 custom_op.so: custom_op.cpp
 	$(CXX) $(CXXFLAGS) $< $(LDFLAGS) -o $@
 
+test_pg_xccl_send_recv: test_pg_xccl_send_recv.cpp
+	$(CXX) -fsycl \
+	  -I$(TORCH_DIR)/include \
+	  -I$(TORCH_DIR)/include/torch/csrc/api/include \
+	  -D_GLIBCXX_USE_CXX11_ABI=1 \
+	  $< \
+	  -L$(TORCH_DIR)/lib \
+	  -ltorch_xpu -ltorch_cpu -ltorch_python -ltorch -lc10_xpu -lc10 \
+	  -o $@
+
 clean:
-	rm -f custom_op.so
+	rm -f custom_op.so test_pg_xccl_send_recv
