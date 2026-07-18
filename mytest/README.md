@@ -131,6 +131,56 @@ make -C mytest
 
 两种方式最终都调用同一个底层路径：**oneCCL C++ API (`ccl::send`)** → `libccl.so` → Level Zero → Intel GPU。
 
+## ProcessGroupXCCL::send/recv C++ 演示
+
+### `test_pg_xccl_send_recv.cpp`
+
+直接调用 `ProcessGroupXCCL::send/recv` 的 C++ 程序，通过 `static_cast<Backend*>` 绕过 protected 访问限制。
+
+**编译关键**——需要 3 个额外 flag 才能用 `icpx` 正常编译 `ProcessGroupXCCL.hpp`:
+
+| Flag | 原因 |
+|------|------|
+| `-DUSE_C10D_XCCL` | 头文件第 20 行 `#ifdef USE_C10D_XCCL` 守卫整个内容 |
+| `-Doverride=` | torch-xpu-ops 与安装的 PyTorch 之间虚函数签名差异 |
+| `-I/path/to/torch-xpu-ops/src` | `#include <xccl/...>` 的搜索路径 |
+
+**核心代码**:
+```cpp
+#include <xccl/ProcessGroupXCCL.hpp>
+using namespace c10d;
+
+// 1. 创建 Store + ProcessGroupXCCL
+auto store = c10::make_intrusive<FileStore>("/tmp/demo", world_size);
+auto pg = c10::make_intrusive<ProcessGroupXCCL>(store, rank, world_size);
+
+// 2. send/recv 是 protected 成员，通过 Backend* 调用
+auto* backend = static_cast<c10d::Backend*>(pg.get());
+std::vector<at::Tensor> tensors = {tensor};
+c10::intrusive_ptr<Work> work;
+if (rank == 0)
+  work = backend->send(tensors, /*dstRank=*/1, /*tag=*/0);
+else
+  work = backend->recv(tensors, /*srcRank=*/0, /*tag=*/0);
+work->wait();
+```
+
+**构建与运行**:
+```bash
+source .venv/bin/activate
+make -f mytest/Makefile.custom_op -C mytest test_pg_xccl_send_recv
+./mytest/run_pg_xccl_send_recv.sh
+```
+
+**输出**:
+```
+[rank 0] sending tensor of shape [10, 5]
+[rank 1] PASS: received tensor matches
+[rank 0] PASS: send completed
+```
+
+**`send` 和 `recv` 是 protected 的原因**：`ProcessGroupXCCL` 将它们声明为 `protected`，以防止用户直接调用底层 P2P 而绕过 PyTorch 的分布式接口（`dist.send/recv`）。通过 `Backend*` 调用是利用 C++ 的访问检查基于静态类型的规则（`Backend` 中为 `public virtual`）。
+
 ## 自定义 XPU 算子示例
 
 ### 问题: 算子实现如何获取 Tensor 对应的 SYCL queue？
