@@ -294,6 +294,78 @@ make -C mytest test_all_reduce_coalesced
 
 两种方式最终都调用 `ccl::allreduce` 在 GPU 上执行 SUM 规约。oneCCL 的 `ccl::group_start/end` 确保多个 allreduce 作为一次批量操作提交，在底层合并 kernel launch，减少驱动开销。
 
+## ProcessGroupXCCLTest 测试
+
+### Python: `test_process_group_xccl.py`
+
+使用 `mp.spawn` + `FileStore` 模式，每个测试独立 spawn 进程，避免全局状态冲突。
+
+| 测试 | 说明 |
+|------|------|
+| `test_file_store_check` | 基础 init，验证 `pg.rank()` / `pg.size()` |
+| `test_send_recv_non_dense_tensor` | 非连续 tensor 的 send/recv 应报错 |
+| `test_set_process_group_desc` | PG 描述符 `"default_pg"` / `"test_purpose"` / `"undefined"` |
+| `test_nan_check_non_float` | 非浮点类型 (uint8/int8/int32/int64/bool) NaN check 为 no-op |
+| `test_nan_check_empty_tensor` | 空 tensor 不 crash |
+| `test_close_multi_pg_unordered` | 多 PG 乱序销毁 |
+| `test_oom` | 50 轮 matmul + all_reduce 后验证内存分配正常 |
+
+**运行**:
+```bash
+python mytest/test_process_group_xccl.py
+# 或
+./mytest/run_process_group_xccl.sh
+```
+
+**输出**:
+```
+--- test_file_store_check ---
+  PASS rank=0 size=2
+  PASS rank=1 size=2
+...
+All tests PASSED
+```
+
+### SYCL C++: `test_process_group_xccl.cpp`
+
+使用 oneCCL C++ API 直接测试通信子管理能力，与 Python 测试对应但不依赖 PyTorch。
+
+| 测试 | 对应 Python 测试 | 说明 |
+|------|-----------------|------|
+| `test_comm_rank_size` | `test_file_store_check` | `comm.rank()` / `comm.size()` |
+| `test_trivial_allreduce` | — | 单元素 allreduce 正确性 |
+| `test_non_float_types` | `test_nan_check_non_float` | int32/int64/uint8 多 dtype allreduce |
+| `test_empty_allreduce` | `test_nan_check_empty_tensor` | 0 元素 allreduce 不崩溃 |
+| `test_comm_split` | `test_set_process_group_desc` | `ccl::split_communicator` 创建子通信子 + 独立 allreduce |
+| `test_multi_comm_cleanup` | `test_close_multi_pg_unordered` | 多个子通信子同时使用 + 析构 |
+
+**构建与运行**:
+```bash
+make -C mytest test_process_group_xccl
+./mytest/run_process_group_xccl_cpp.sh
+```
+
+**输出**:
+```
+--- test_comm_rank_size ---
+  PASS comm rank
+  PASS comm size
+...
+11 passed, 0 failed
+```
+
+### 关键: `ccl::split_communicator`
+
+对应 Python 的 `dist.new_group()`，创建子通信子:
+
+```cpp
+int color = rank % 2;                          // 分组依据
+auto sub = ccl::split_communicator(comm, color, rank);
+// sub.rank() 和 sub.size() 基于 color 重新编号
+ccl::allreduce(buf, buf, N, dtype, sum, sub, stream).wait();
+// 只在 sub 包含的 ranks 之间做规约
+```
+
 ## `dist.send()` 底层调用链分析
 
 从 Python 到 GPU 驱动的完整调用链：
