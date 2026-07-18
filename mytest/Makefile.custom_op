@@ -1,28 +1,33 @@
 TORCH_DIR = $(shell python -c "import torch; import os; print(os.path.dirname(torch.__file__))" 2>/dev/null)
 PYTHON_INC = $(shell python -c "import sysconfig; print(sysconfig.get_path('include'))")
+XPU_OPS_SRC = $(shell cd .. && pwd)/src
 
 CXX = icpx
-CXXFLAGS = -fsycl -fPIC -shared \
-  -I$(TORCH_DIR)/include \
-  -I$(TORCH_DIR)/include/torch/csrc/api/include \
-  -I$(PYTHON_INC) \
-  -DTORCH_EXTENSION_NAME=custom_op \
-  -D_GLIBCXX_USE_CXX11_ABI=1
-
-LDFLAGS = -L$(TORCH_DIR)/lib \
-  -ltorch_xpu -ltorch_cpu -ltorch_python -ltorch -lc10_xpu -lc10
 
 custom_op.so: custom_op.cpp
-	$(CXX) $(CXXFLAGS) $< $(LDFLAGS) -o $@
-
-test_pg_xccl_send_recv: test_pg_xccl_send_recv.cpp
-	$(CXX) -fsycl \
+	$(CXX) -fsycl -fPIC -shared \
 	  -I$(TORCH_DIR)/include \
 	  -I$(TORCH_DIR)/include/torch/csrc/api/include \
+	  -I$(PYTHON_INC) \
+	  -DTORCH_EXTENSION_NAME=custom_op \
 	  -D_GLIBCXX_USE_CXX11_ABI=1 \
 	  $< \
 	  -L$(TORCH_DIR)/lib \
 	  -ltorch_xpu -ltorch_cpu -ltorch_python -ltorch -lc10_xpu -lc10 \
+	  -o $@
+
+test_pg_xccl_send_recv: test_pg_xccl_send_recv.cpp
+	$(CXX) -fsycl \
+	  -I$(XPU_OPS_SRC) \
+	  -I$(TORCH_DIR)/include \
+	  -I$(TORCH_DIR)/include/torch/csrc/api/include \
+	  -I$(PYTHON_INC) \
+	  -D_GLIBCXX_USE_CXX11_ABI=1 \
+	  -DUSE_C10D_XCCL \
+	  -Doverride= \
+	  $< \
+	  -L$(TORCH_DIR)/lib \
+	  -ltorch_xpu -ltorch_cpu -ltorch -lc10_xpu -lc10 \
 	  -o $@
 
 clean:
