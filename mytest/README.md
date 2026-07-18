@@ -175,7 +175,9 @@ at::Tensor add_one(const at::Tensor& input) {
 
 **构建**:
 ```bash
+# 在项目根目录执行
 make -f mytest/Makefile.custom_op -C mytest
+# 等价于: cd mytest && make -f Makefile.custom_op
 ```
 
 **运行**:
@@ -197,6 +199,58 @@ make -f mytest/Makefile.custom_op -C mytest
 - `queue()` 返回预创建的 `sycl::queue`，已绑定到对应设备的 `sycl::device` 和 `sycl::context`
 - 使用 `icpx -fsycl` 编译，链接 `libtorch_xpu.so` + `libc10_xpu.so`
 - 由于本机主进程 Level Zero 驱动状态可能退化，测试通过 `mp.spawn` 在子进程中运行
+
+### `AT_DISPATCH` 原理
+
+`add_one` 中用 `AT_DISPATCH_FLOATING_TYPES_AND_HALF` 替代了硬编码的 `data_ptr<float>()`，使算子支持多种 dtype:
+
+```cpp
+AT_DISPATCH_FLOATING_TYPES_AND_HALF(input.scalar_type(), "add_one_xpu", [&] {
+    const scalar_t* in_ptr = input.data_ptr<scalar_t>();
+    scalar_t* out_ptr = output.data_ptr<scalar_t>();
+    // kernel with scalar_t
+});
+```
+
+**展开等价于**:
+```cpp
+switch (input.scalar_type()) {
+  case at::ScalarType::Double: {
+    using scalar_t = double;
+    /* lambda */();  // data_ptr<double>
+    break;
+  }
+  case at::ScalarType::Float: {
+    using scalar_t = float;
+    /* lambda */();  // data_ptr<float>
+    break;
+  }
+  case at::ScalarType::Half: {
+    using scalar_t = at::Half;
+    /* lambda */();  // data_ptr<at::Half>
+    break;
+  }
+  default:
+    TORCH_CHECK(false, "'add_one_xpu' not implemented for ...");
+}
+```
+
+**嵌套展开链**:
+```
+AT_DISPATCH_FLOATING_TYPES_AND_HALF(TYPE, NAME, lambda)
+  └─ AT_DISPATCH_SWITCH(TYPE, NAME,
+        AT_DISPATCH_CASE(kDouble, lambda)   // case Double: using scalar_t = double; lambda()
+        AT_DISPATCH_CASE(kFloat,  lambda)   // case Float:  using scalar_t = float;  lambda()
+        AT_DISPATCH_CASE(kHalf,   lambda))  // case Half:   using scalar_t = at::Half; lambda()
+
+AT_DISPATCH_SWITCH → switch(TYPE) { __VA_ARGS__ default: TORCH_CHECK(false, ...) }
+AT_DISPATCH_CASE    → case enum_type: { using scalar_t = <C++ type>; return __VA_ARGS__(); }
+```
+
+**关键设计**:
+- **`scalar_t`** 在每个 `case` 分支内定义为对应的 C++ 类型，lambda 模板为每个 dtype 编译一个特化版本
+- **`NAME`**（如 `"add_one_xpu"`）作为编译标签，避免符号冲突（ODR）
+- 其他变体: `AT_DISPATCH_ALL_TYPES`（float + double + 整数类型）、`AT_DISPATCH_INTEGRAL_TYPES`（仅整数）、`AT_DISPATCH_ALL_TYPES_AND_HALF` 等
 
 ## SYCL C++ all_reduce_coalesced 测试
 

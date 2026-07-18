@@ -24,4 +24,5 @@ def worker(rank):
             print(f"[rank {rank}] FAIL add_one: {out} != {expected}")
 
 if __name__ == "__main__":
-    mp.spawn(worker, args=(), nprocs=2)
+    nprocs = min(torch.xpu.device_count(), 2)
+    mp.spawn(worker, args=(), nprocs=nprocs)
