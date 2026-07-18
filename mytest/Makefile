@@ -12,5 +12,8 @@ test_single_p2p: test_single_p2p.cpp
 test_all_reduce_coalesced: test_all_reduce_coalesced.cpp
 	$(CXX) $(CXXFLAGS) $< $(LDFLAGS) $(LDLIBS) -o $@
 
+test_process_group_xccl: test_process_group_xccl.cpp
+	$(CXX) $(CXXFLAGS) $< $(LDFLAGS) $(LDLIBS) -o $@
+
 clean:
-	rm -f test_single_p2p test_all_reduce_coalesced
+	rm -f test_single_p2p test_all_reduce_coalesced test_process_group_xccl
