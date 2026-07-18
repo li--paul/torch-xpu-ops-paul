@@ -25,13 +25,15 @@ at::Tensor add_one(const at::Tensor& input) {
   auto& queue = c10::xpu::getCurrentXPUStream(dev_idx).queue();
   auto output = at::empty_like(input);
 
-  auto n = input.numel();
-  const float* in_ptr = input.data_ptr<float>();
-  float* out_ptr = output.data_ptr<float>();
+  AT_DISPATCH_FLOATING_TYPES_AND_HALF(input.scalar_type(), "add_one_xpu", [&] {
+    auto n = input.numel();
+    const scalar_t* in_ptr = input.data_ptr<scalar_t>();
+    scalar_t* out_ptr = output.data_ptr<scalar_t>();
 
-  queue.submit([&](sycl::handler& cgh) {
-    cgh.parallel_for(sycl::range<1>(n), [=](sycl::id<1> i) {
-      out_ptr[i] = in_ptr[i] + 1.0f;
+    queue.submit([&](sycl::handler& cgh) {
+      cgh.parallel_for(sycl::range<1>(n), [=](sycl::id<1> i) {
+        out_ptr[i] = in_ptr[i] + static_cast<scalar_t>(1);
+      });
     });
   });
 
